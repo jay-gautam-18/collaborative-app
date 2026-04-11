@@ -4,8 +4,10 @@ import { Server} from "socket.io"
 import { YSocketIO } from "y-socket.io/dist/server"
 
 const app = epxress()
+
 const httpServer = createServer(app)
 
+app.use(epxress.static("public"))
 const io = new Server(httpServer , {
     cors:{
         origin:"*",
