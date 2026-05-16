@@ -84,7 +84,7 @@ function App() {
         <h2 className='text-gray-900 font-bold text-xl p-4 border-b border-gray-300'>Active Users</h2>
         <ul className='p-4'>
           {user.map((user,index)=>(
-            <li key={index} className='text-gray-100  p-1 rounded-4xl bg-amber-950 font-medium mb-2'>{user.username}</li>
+            <li key={index} className='text-red-700  p-1 rounded-4xl bg-amber-950 font-medium mb-2'>{user.username}</li>
           ))}
         </ul>
       </aside>
