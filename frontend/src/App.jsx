@@ -1,103 +1,107 @@
-import { useState ,useRef ,useMemo , useEffect, use } from 'react'
-import './App.css'
-import { Editor } from '@monaco-editor/react'
-import { MonacoBinding } from 'y-monaco'
-import { SocketIOProvider } from 'y-socket.io'
-import * as Y from "yjs"
-function App() {
-  const editorRef = useRef(null) 
-  const [username , setUsername] = useState(()=>{
-    return new URLSearchParams(window.location.search).get("username") || ""
+import { useState, useEffect } from "react"
+import "./App.css"
+import Lobby from "./components/Lobby"
+import Room from "./components/Room"
+
+// ── Tiny client-side router ────────────────────────────────────────────────────
+// URL shapes:
+//   /                  → lobby
+//   /room/swift-river-42 → room view
+//
+// We do NOT use react-router to keep deps minimal. If you add react-router
+// later just replace the useEffect + navigate helpers below.
+
+function getRoomIdFromUrl() {
+  const match = window.location.pathname.match(/^\/room\/([^/]+)$/)
+  return match ? match[1] : null
+}
+
+function navigateToRoom(roomId) {
+  window.history.pushState({}, "", `/room/${roomId}`)
+  // Force a re-render by dispatching a popstate-like event
+  window.dispatchEvent(new Event("pushstate"))
+}
+
+function navigateToLobby() {
+  window.history.pushState({}, "", "/")
+  window.dispatchEvent(new Event("pushstate"))
+}
+
+export default function App() {
+  const [username, setUsername] = useState(() => {
+    // Persist username across page refreshes
+    return localStorage.getItem("ct-username") || ""
   })
-  const [user , setUser] = useState([])
+  const [usernameInput, setUsernameInput] = useState("")
+  const [currentRoomId, setCurrentRoomId] = useState(() => getRoomIdFromUrl())
 
-  const yDoc = useMemo( ()=> new Y.Doc() ,[] )
-  const yText = useMemo( ()=> yDoc.getText("monaco") , [yDoc])
-  const handleMount = (editor)=>{
-    editorRef.current = editor
-      new MonacoBinding(
-      yText,
-      editorRef.current.getModel(),
-      new Set([editorRef.current]),
-    )
-  }
-  const handleJoin = (e)=>{
-    e.preventDefault()
-    setUsername(e.target.username.value)
-    window.history.pushState({},"","?username="+e.target.username.value)
-  }
-  useEffect(()=>{
-    
-    if(username ){
-       const provider = new SocketIOProvider("http://localhost:3000" , "monaco" ,yDoc,{autoConnect:true})
-       provider.awareness.setLocalStateField("user",{
-        username
-       })
-       const states = Array.from(provider.awareness.getStates().values())
-        setUser(states.filter(state=>state.user && state.user.username).map(state=>state.user))
-       provider.awareness.on("change",()=>{
-        const states = Array.from(provider.awareness.getStates().values())
-        setUser(states.filter(state=>state.user && state.user.username).map(state=>state.user))
-       })
+  // Listen to URL changes (back/forward + our custom pushstate event)
+  useEffect(() => {
+    function handleNavigate() {
+      setCurrentRoomId(getRoomIdFromUrl())
+    }
+    window.addEventListener("popstate", handleNavigate)
+    window.addEventListener("pushstate", handleNavigate)
+    return () => {
+      window.removeEventListener("popstate", handleNavigate)
+      window.removeEventListener("pushstate", handleNavigate)
+    }
+  }, [])
 
-       function handleBeforeUnload(){
-        provider.awareness.setLocalStateField("user",null)
+  // ── Username gate ──────────────────────────────────────────────────────────
+  if (!username) {
+    function handleSetUsername(e) {
+      e.preventDefault()
+      const name = usernameInput.trim()
+      if (!name) return
+      localStorage.setItem("ct-username", name)
+      setUsername(name)
+    }
 
-       }
-       window.addEventListener("beforeunload",handleBeforeUnload)
-       
-
-    
-    return ()=>{
-        provider.disconnect()
-        window.removeEventListener("beforeunload",handleBeforeUnload)
-       }
-  }
-  },[
-    username
-  ])
-  if(!username){
     return (
-      <main className='h-screen w-screen bg-gray-950 flex gap-3 p-4 items-center justify-center'>
-        <form className='felx flex-col gap-4'
-          onSubmit={handleJoin}>
-          <input
-            type="text"
-            placeholder="Enter your username"
-            name = "username"
-            className='bg-gray-800 text-white p-2 rounded-lg placeholder:text-gray-500 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500'
-          />
-          <button className='p-2 rounded-lg bg-amber-100 border-amber-100 text-gray-900 font-bold'
-          type='submit'
-          >
-            join
-          </button>
-        </form>
-
+      <main className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+        <div className="w-full max-w-sm">
+          <h1 className="text-2xl font-bold text-white mb-2 text-center">CodeTogether</h1>
+          <p className="text-gray-400 text-sm text-center mb-8">
+            Choose a display name to get started
+          </p>
+          <form onSubmit={handleSetUsername} className="flex flex-col gap-3">
+            <input
+              type="text"
+              value={usernameInput}
+              onChange={(e) => setUsernameInput(e.target.value)}
+              placeholder="Your name or username"
+              autoFocus
+              className="bg-gray-800 border border-gray-600 text-white rounded-lg px-4 py-3 text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="submit"
+              className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-lg transition-colors text-sm"
+            >
+              Continue
+            </button>
+          </form>
+        </div>
       </main>
     )
   }
 
-  return (
-    <main className='h-screen w-screen bg-gray-950 flex gap-3 p-4' >
-      <aside className='bg-amber-100 h-full w-1/4 rounded-lg'>
-        <h2 className='text-gray-900 font-bold text-xl p-4 border-b border-gray-300'>Active Users</h2>
-        <ul className='p-4'>
-          {user.map((user,index)=>(
-            <li key={index} className='text-red-700  p-1 rounded-4xl bg-amber-950 font-medium mb-2'>{user.username}</li>
-          ))}
-        </ul>
-      </aside>
-      <section className='bg-neutral-700 h-full rounded-lg  w-3/4'>
-      <Editor height="100%" 
-      defaultLanguage="javascript" 
-      defaultValue="// some comment" 
-      theme='vs-dark'
-      onMount={handleMount}
+  // ── Room view ──────────────────────────────────────────────────────────────
+  if (currentRoomId) {
+    return (
+      <Room
+        roomId={currentRoomId}
+        username={username}
+        onLeave={() => navigateToLobby()}
       />
-      </section>
-    </main>
+    )
+  }
+
+  // ── Lobby ──────────────────────────────────────────────────────────────────
+  return (
+    <Lobby
+      username={username}
+      onJoinRoom={(roomId) => navigateToRoom(roomId)}
+    />
   )
 }
-
-export default App
