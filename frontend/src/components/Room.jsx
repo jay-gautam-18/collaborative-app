@@ -2,8 +2,9 @@ import { useState, useRef, useMemo, useEffect, useCallback } from "react"
 import { Editor } from "@monaco-editor/react"
 import { MonacoBinding } from "y-monaco"
 import { SocketIOProvider } from "y-socket.io"
+import { io as ioClient } from "socket.io-client"   // ← plain socket for run + meetings
 import * as Y from "yjs"
-import { useWebRTC } from "../hooks/useWebRTC"   // ← named import
+import { useWebRTC } from "../hooks/useWebRTC"
 import MeetingStrip from "./MeetingStrip"
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ function ProblemPanel({ problemSlug }) {
   if (collapsed) {
     return (
       <div className="w-8 bg-gray-900 border-r border-gray-800 flex flex-col items-center py-4 shrink-0">
-        <button onClick={() => setCollapsed(false)} className="text-gray-500 hover:text-white transition-colors" title="Show problem">
+        <button onClick={() => setCollapsed(false)} className="text-gray-500 hover:text-white" title="Show problem">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         </button>
       </div>
@@ -83,22 +84,22 @@ function ProblemPanel({ problemSlug }) {
     <aside className="w-80 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0">
         <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Problem</h2>
-        <button onClick={() => setCollapsed(true)} className="text-gray-500 hover:text-white transition-colors" title="Collapse">
+        <button onClick={() => setCollapsed(true)} className="text-gray-500 hover:text-white" title="Collapse">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15 5v14L4 12z"/></svg>
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 text-sm text-gray-300">
         {loading && <div className="flex items-center gap-2 text-gray-500 mt-4"><div className="w-3 h-3 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin"/>Loading…</div>}
         {error && <div className="text-red-400 text-xs mt-4 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">Failed: {error}</div>}
-        {!loading && !error && !problem && <div className="text-gray-500 text-xs mt-4">No problem attached to this room.</div>}
+        {!loading && !error && !problem && <div className="text-gray-500 text-xs mt-4">No problem attached.</div>}
         {problem && (
           <div className="flex flex-col gap-4">
             <div>
-              <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <div className="flex items-center gap-2 mb-1">
                 <span className="text-gray-400 text-xs">#{problem.questionFrontendId}</span>
                 <span className={`text-xs font-medium px-1.5 py-0.5 rounded border ${DIFFICULTY_COLOR[problem.difficulty]}`}>{problem.difficulty}</span>
               </div>
-              <h3 className="text-white font-semibold text-base leading-snug">{problem.title}</h3>
+              <h3 className="text-white font-semibold text-base">{problem.title}</h3>
             </div>
             {problem.topicTags?.length > 0 && (
               <div className="flex flex-wrap gap-1">
@@ -107,12 +108,10 @@ function ProblemPanel({ problemSlug }) {
                 ))}
               </div>
             )}
-            {problem.content && (
-              <div className="problem-content text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: problem.content }}/>
-            )}
+            {problem.content && <div className="problem-content text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: problem.content }}/>}
             {problem.hints?.length > 0 && (
-              <details className="mt-2">
-                <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 select-none">Hints ({problem.hints.length})</summary>
+              <details>
+                <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">Hints ({problem.hints.length})</summary>
                 <ul className="mt-2 flex flex-col gap-2">
                   {problem.hints.map((hint, i) => (
                     <li key={i} className="text-xs text-gray-400 bg-gray-800 border border-gray-700 rounded px-3 py-2">{hint}</li>
@@ -127,7 +126,7 @@ function ProblemPanel({ problemSlug }) {
   )
 }
 
-// ── Terminal panel ────────────────────────────────────────────────────────────
+// ── Terminal ──────────────────────────────────────────────────────────────────
 function Terminal({ lines, isRunning, onClear }) {
   const bottomRef = useRef(null)
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }) }, [lines])
@@ -141,21 +140,20 @@ function Terminal({ lines, isRunning, onClear }) {
             <div className="w-3 h-3 rounded-full bg-yellow-500/70"/>
             <div className="w-3 h-3 rounded-full bg-green-500/70"/>
           </div>
-          <span className="text-gray-500 text-xs ml-1">output</span>
+          <span className="text-gray-500 ml-1">output</span>
           {isRunning && (
             <div className="flex items-center gap-1.5 ml-2">
               <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"/>
-              <span className="text-green-400 text-xs">running…</span>
+              <span className="text-green-400">running…</span>
             </div>
           )}
         </div>
-        <button onClick={onClear} className="text-gray-600 hover:text-gray-400 text-xs transition-colors">clear</button>
+        <button onClick={onClear} className="text-gray-600 hover:text-gray-400 transition-colors">clear</button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 leading-relaxed">
         {lines.length === 0 && <span className="text-gray-700">Run your code to see output here…</span>}
         {lines.map((line, i) => (
-          <span
-            key={i}
+          <span key={i}
             className={line.type === "stderr" ? "text-red-400" : line.type === "info" ? "text-gray-500" : "text-gray-200"}
             style={{ display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all" }}
           >
@@ -177,9 +175,12 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
   const chatBottomRef = useRef(null)
   const yTextRef      = useRef(null)
 
-  // KEY FIX: store socket in a ref so handleRun always reads the live value
-  // without needing it as a React state (which caused the race condition).
-  const socketRef = useRef(null)
+  // ── Two separate sockets ───────────────────────────────────────────────────
+  // yjsSocket  : managed by SocketIOProvider — handles CRDT sync on /yjs namespace
+  // appSocket  : plain socket.io-client on / namespace — handles run-code + meetings
+  // They are different connections to the same server but different namespaces.
+  const appSocketRef = useRef(null)   // ref so handleRun never goes stale
+  const [appSocket, setAppSocket] = useState(null)  // state for useWebRTC
 
   const [users, setUsers]               = useState([])
   const [language, setLanguage]         = useState("javascript")
@@ -188,16 +189,11 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
   const [chatInput, setChatInput]       = useState("")
   const [meetingActive, setMeetingActive] = useState(false)
 
-  // Terminal state
-  const [terminalLines, setTerminalLines]     = useState([])
-  const [isRunning, setIsRunning]             = useState(false)
-  const [terminalOpen, setTerminalOpen]       = useState(false)
-  const [terminalHeight, setTerminalHeight]   = useState(200)
+  const [terminalLines, setTerminalLines]   = useState([])
+  const [isRunning, setIsRunning]           = useState(false)
+  const [terminalOpen, setTerminalOpen]     = useState(false)
+  const [terminalHeight, setTerminalHeight] = useState(200)
 
-  // Socket state — only used to pass to useWebRTC (which needs re-renders)
-  const [socketState, setSocketState] = useState(null)
-
-  // Yjs
   const yDoc      = useMemo(() => new Y.Doc(), [])
   const yText     = useMemo(() => yDoc.getText("monaco"), [yDoc])
   const ySettings = useMemo(() => yDoc.getMap("settings"), [yDoc])
@@ -205,17 +201,57 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
 
   useEffect(() => { yTextRef.current = yText; injectCursorCSS() }, [yText])
 
-  // ── Provider ──────────────────────────────────────────────────────────────
+  // ── App socket (plain Socket.IO on / namespace) ───────────────────────────
+  useEffect(() => {
+    // Create a dedicated socket connection for app events (run, meetings)
+    // This connects to the default "/" namespace where io.on("connection") lives
+    const sock = ioClient("http://localhost:3000", {
+      transports: ["websocket"],
+      reconnectionAttempts: 5,
+    })
+
+    sock.on("connect", () => {
+      console.log("[app-socket] connected:", sock.id)
+      // Register this socket with the room so backend knows who we are
+      sock.emit("join-room", { roomId, username, problemSlug })
+    })
+
+    // ── Run output ────────────────────────────────────────────────────────
+    sock.on("run-output", ({ type, text }) => {
+      if (type === "clear") return   // ignore clear signal from server
+      setTerminalLines(prev => [...prev, { type, text }])
+      setTerminalOpen(true)
+    })
+
+    sock.on("run-done", ({ exitCode }) => {
+      console.log("[run] done, exit code:", exitCode)
+      setIsRunning(false)
+    })
+
+    sock.on("run-notification", ({ username: who, language: lang }) => {
+      setTerminalLines(prev => [...prev, { type: "info", text: `▶ ${who} is running ${lang}…\n` }])
+      setTerminalOpen(true)
+    })
+
+    sock.on("disconnect", (reason) => {
+      console.log("[app-socket] disconnected:", reason)
+    })
+
+    appSocketRef.current = sock
+    setAppSocket(sock)
+
+    return () => {
+      sock.disconnect()
+      appSocketRef.current = null
+      setAppSocket(null)
+    }
+  }, [roomId, username, problemSlug])
+
+  // ── Yjs provider (CRDT sync) ──────────────────────────────────────────────
   useEffect(() => {
     const provider = new SocketIOProvider("http://localhost:3000", roomId, yDoc, { autoConnect: true })
     providerRef.current  = provider
     awarenessRef.current = provider.awareness
-
-    // Store socket in ref immediately — no async, no race
-    socketRef.current = provider.socket
-    setSocketState(provider.socket)  // also set state for useWebRTC
-
-    provider.socket.emit("join-room", { roomId, username, problemSlug })
 
     const myColor = colorForUser(username)
     provider.awareness.setLocalStateField("user", { username, name: username, color: myColor })
@@ -249,54 +285,33 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
       }
     })
 
-    // ── Run output events ──────────────────────────────────────────────────
-    // Attach directly to the socket here — NOT using a state variable.
-    // This avoids the race where socket state was null at click time.
-    provider.socket.on("run-output", ({ type, text }) => {
-      // NOTE: we removed type==="clear" wipe — instead we clear at emit time
-      setTerminalLines(prev => [...prev, { type, text }])
-      setTerminalOpen(true)
-    })
-
-    provider.socket.on("run-done", () => {
-      setIsRunning(false)
-    })
-
-    provider.socket.on("run-notification", ({ username: who, language: lang }) => {
-      setTerminalLines(prev => [...prev, { type: "info", text: `▶ ${who} is running ${lang}…\n` }])
-      setTerminalOpen(true)
-    })
-
     return () => {
       window.removeEventListener("beforeunload", handleUnload)
       provider.awareness.setLocalStateField("user", null)
       provider.awareness.off("change", updateUsers)
-      provider.socket.off("run-output")
-      provider.socket.off("run-done")
-      provider.socket.off("run-notification")
       bindingRef.current?.destroy()
       bindingRef.current = null
       provider.disconnect()
       providerRef.current  = null
       awarenessRef.current = null
-      socketRef.current    = null
-      setSocketState(null)
     }
-  }, [roomId, username, problemSlug, yDoc, ySettings, yMessages])
+  }, [roomId, username, yDoc, ySettings, yMessages])
 
   // ── Run code ──────────────────────────────────────────────────────────────
-  // Uses socketRef.current — always the live socket, never stale/null
   function handleRun() {
-    const sock = socketRef.current
-    if (isRunning || !sock) return
+    const sock = appSocketRef.current
+    if (!sock || !sock.connected) {
+      console.warn("[run] socket not connected, state:", sock?.connected)
+      return
+    }
+    if (isRunning) return
     const code = yTextRef.current?.toString() || ""
     if (!code.trim()) return
 
-    // Clear terminal and show info line immediately
+    console.log("[run] emitting run-code, language:", language, "chars:", code.length)
     setTerminalLines([{ type: "info", text: `▶ Running ${language}…\n` }])
     setTerminalOpen(true)
     setIsRunning(true)
-
     sock.emit("run-code", { code, language, roomId })
   }
 
@@ -306,7 +321,7 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
     isMuted, isCamOff, isScreenSharing,
     toggleMic, toggleCam, toggleScreenShare,
     joinMeeting, leaveMeeting,
-  } = useWebRTC({ socket: socketState, roomId, username, meetingActive })
+  } = useWebRTC({ socket: appSocket, roomId, username, meetingActive })
 
   async function handleToggleMeeting() {
     if (meetingActive) { leaveMeeting(); setMeetingActive(false) }
@@ -365,12 +380,10 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
   return (
     <main className="h-screen w-screen bg-gray-950 flex flex-col overflow-hidden">
 
-      {/* Top bar */}
       <header className="h-12 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-3 shrink-0">
         <span className="text-white font-bold text-sm tracking-tight">CodeTogether</span>
         <div className="w-px h-5 bg-gray-700"/>
-
-        <button onClick={copyRoomId} className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors group" title="Copy room link">
+        <button onClick={copyRoomId} className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors group">
           <span className="font-mono text-xs">{roomId}</span>
           <span className="text-xs text-gray-600 group-hover:text-gray-400">{copied ? "✓" : "copy"}</span>
         </button>
@@ -387,17 +400,12 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
             <option value="rust">Rust</option>
           </select>
 
-          {/* Run button */}
-          <button
-            onClick={handleRun}
-            disabled={isRunning || !canRun}
-            title={!canRun ? `${language} is not supported on this server` : "Run code"}
+          <button onClick={handleRun} disabled={isRunning || !canRun}
+            title={!canRun ? `${language} not supported` : "Run code"}
             className={`flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-lg transition-all ${
-              isRunning
-                ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                : !canRun
-                  ? "bg-gray-800 text-gray-600 cursor-not-allowed border border-gray-700"
-                  : "bg-green-600 hover:bg-green-500 text-white shadow-sm shadow-green-900/40"
+              isRunning ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+              : !canRun ? "bg-gray-800 text-gray-600 cursor-not-allowed border border-gray-700"
+              : "bg-green-600 hover:bg-green-500 text-white"
             }`}
           >
             {isRunning
@@ -407,9 +415,7 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
           </button>
         </div>
 
-        {/* Meeting toggle */}
-        <button
-          onClick={handleToggleMeeting}
+        <button onClick={handleToggleMeeting}
           className={`flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors ${
             meetingActive ? "bg-red-600 hover:bg-red-500 text-white" : "bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300"
           }`}
@@ -428,12 +434,9 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
         </button>
       </header>
 
-      {/* Main area */}
       <div className="flex flex-1 overflow-hidden min-h-0">
-
         {problemSlug && <ProblemPanel problemSlug={problemSlug}/>}
 
-        {/* Editor + terminal */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <section className="flex-1 overflow-hidden min-h-0">
             <Editor
@@ -448,7 +451,7 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
 
           {terminalOpen && (
             <>
-              <div onMouseDown={onDragStart} className="h-1.5 bg-gray-800 hover:bg-blue-600/50 cursor-row-resize transition-colors shrink-0 border-t border-gray-700" title="Drag to resize"/>
+              <div onMouseDown={onDragStart} className="h-1.5 bg-gray-800 hover:bg-blue-600/50 cursor-row-resize transition-colors shrink-0 border-t border-gray-700"/>
               <div className="shrink-0 bg-[#0d1117] border-t border-gray-800" style={{ height: terminalHeight }}>
                 <Terminal lines={terminalLines} isRunning={isRunning} onClear={() => setTerminalLines([])}/>
               </div>
@@ -466,7 +469,6 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
           )}
         </div>
 
-        {/* Right sidebar */}
         <aside className="w-64 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0">
           <div className="p-4 border-b border-gray-800 shrink-0">
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Online — {users.length}</h2>
@@ -510,11 +512,9 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
             </div>
             <div className="p-3 border-t border-gray-800 shrink-0">
               <div className="flex gap-2">
-                <input
-                  type="text" value={chatInput} onChange={e => setChatInput(e.target.value)}
+                <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)}
                   onKeyDown={handleChatKeyDown} placeholder="Message…" maxLength={500}
-                  className="flex-1 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0"
-                />
+                  className="flex-1 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0"/>
                 <button onClick={sendMessage} disabled={!chatInput.trim()}
                   className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors shrink-0">
                   Send
@@ -525,7 +525,6 @@ export default function Room({ roomId, username, problemSlug, onLeave }) {
         </aside>
       </div>
 
-      {/* Meeting strip */}
       <MeetingStrip
         isActive={meetingActive} localStream={localStream} peers={peers} username={username}
         isMuted={isMuted} isCamOff={isCamOff} isScreenSharing={isScreenSharing}
