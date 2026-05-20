@@ -6,7 +6,8 @@ const ICE_SERVERS = [
   { urls: "stun:stun2.l.google.com:19302" },
 ]
 
-export default function useWebRTC({ socket, roomId, username, meetingActive }) {
+// Named export — matches the import in Room.jsx
+export function useWebRTC({ socket, roomId, username, meetingActive }) {
   const [localStream, setLocalStream] = useState(null)
   const [peers, setPeers] = useState(new Map())
   const [isMuted, setIsMuted] = useState(false)
@@ -17,14 +18,11 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
   const localStreamRef = useRef(null)
   const screenStreamRef = useRef(null)
   const activeRef = useRef(false)
-
-  // Always-current socket ref — socket prop starts null, becomes real socket
-  // after provider mounts. Callbacks read this ref so they never stale-close.
   const socketRef = useRef(socket)
+
   useEffect(() => { socketRef.current = socket }, [socket])
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
+  // ── Peer map helpers ──────────────────────────────────────────────────────
   function updatePeer(peerId, patch) {
     setPeers((prev) => {
       const next = new Map(prev)
@@ -34,19 +32,13 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
   }
 
   function removePeer(peerId) {
-    setPeers((prev) => {
-      const next = new Map(prev)
-      next.delete(peerId)
-      return next
-    })
+    setPeers((prev) => { const n = new Map(prev); n.delete(peerId); return n })
     const pc = pcsRef.current.get(peerId)
     if (pc) { pc.close(); pcsRef.current.delete(peerId) }
   }
 
-  // ── Create RTCPeerConnection ──────────────────────────────────────────────
-
+  // ── RTCPeerConnection factory ─────────────────────────────────────────────
   const createPeerConnection = useCallback((peerId, peerUsername) => {
-    // If we already have a connection to this peer, close it first
     if (pcsRef.current.has(peerId)) {
       pcsRef.current.get(peerId).close()
       pcsRef.current.delete(peerId)
@@ -62,9 +54,7 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
     }
 
     pc.ontrack = ({ streams }) => {
-      if (streams?.[0]) {
-        updatePeer(peerId, { stream: streams[0], username: peerUsername })
-      }
+      if (streams?.[0]) updatePeer(peerId, { stream: streams[0], username: peerUsername })
     }
 
     pc.onconnectionstatechange = () => {
@@ -73,7 +63,6 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
       }
     }
 
-    // Add existing local tracks so remote side gets our video/audio
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => {
         pc.addTrack(track, localStreamRef.current)
@@ -83,10 +72,8 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
     return pc
   }, [])
 
-  // ── Local media ───────────────────────────────────────────────────────────
-
+  // ── Get local media ───────────────────────────────────────────────────────
   async function getLocalStream() {
-    // Return existing stream if already acquired
     if (localStreamRef.current) return localStreamRef.current
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
@@ -95,7 +82,7 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
       return stream
     } catch (err) {
       console.warn("[webrtc] media denied:", err.message)
-      // Fallback silent stream so signalling still works without camera
+      // Silent fallback so signalling still works
       const ctx = new AudioContext()
       const dest = ctx.createMediaStreamDestination()
       localStreamRef.current = dest.stream
@@ -104,73 +91,35 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
     }
   }
 
-  // ── Join meeting ──────────────────────────────────────────────────────────
-  // CRITICAL ORDER:
-  //   1. Set activeRef = true FIRST (synchronously, before any await)
-  //   2. Get media (async — may take 1-2s for camera permission)
-  //   3. Emit meeting-join AFTER media is ready so tracks exist when
-  //      offers arrive from existing peers
-  //
-  // Why: if activeRef is false when onMeetingPeerJoined fires, the handler
-  // would previously bail out. Now we don't guard on activeRef in handlers,
-  // but we still need the stream ready before creating peer connections.
-
+  // ── Join / leave ──────────────────────────────────────────────────────────
   const joinMeeting = useCallback(async () => {
     if (activeRef.current) return
-    if (!socketRef.current) {
-      console.warn("[webrtc] joinMeeting: socket not ready")
-      return
-    }
-
-    // ← Set active BEFORE the async camera request
+    if (!socketRef.current) { console.warn("[webrtc] socket not ready"); return }
     activeRef.current = true
-
-    // Get camera/mic — existing peers will get our tracks added properly
     await getLocalStream()
-
-    // Now tell the server we're in the call. The server notifies existing
-    // members, who send us offers. Our signalling handlers are already
-    // listening (attached when socket became non-null).
     socketRef.current.emit("meeting-join", { roomId, username })
-    console.log("[webrtc] meeting-join emitted, room:", roomId)
   }, [roomId, username])
-
-  // ── Leave meeting ─────────────────────────────────────────────────────────
 
   const leaveMeeting = useCallback(() => {
     activeRef.current = false
-
     localStreamRef.current?.getTracks().forEach((t) => t.stop())
     localStreamRef.current = null
     setLocalStream(null)
-
     screenStreamRef.current?.getTracks().forEach((t) => t.stop())
     screenStreamRef.current = null
     setIsScreenSharing(false)
-
     pcsRef.current.forEach((pc) => pc.close())
     pcsRef.current.clear()
     setPeers(new Map())
-
     socketRef.current?.emit("meeting-leave", { roomId })
   }, [roomId])
 
-  // ── Signalling listeners ──────────────────────────────────────────────────
-  // Re-attached whenever socket changes (null → real socket on mount).
-  // NO activeRef guards here — the guards were the bug. If our socket
-  // receives a meeting event we should always handle it; activeRef only
-  // gates whether WE initiated, not whether we can respond.
-
+  // ── Signalling ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!socket) return
 
-    // Existing member in the call → we just joined → they send us an offer
     async function onMeetingPeerJoined({ peerId, username: peerUsername }) {
-      console.log("[webrtc] meeting-peer-joined from:", peerId, peerUsername)
-
-      // Ensure we have media before creating the connection
       await getLocalStream()
-
       updatePeer(peerId, { stream: null, username: peerUsername })
       const pc = createPeerConnection(peerId, peerUsername)
       const offer = await pc.createOffer()
@@ -178,12 +127,8 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
       socketRef.current?.emit("webrtc-offer", { targetId: peerId, offer })
     }
 
-    // We just joined → existing member sends us an offer → we answer
     async function onOffer({ fromId, offer, username: peerUsername }) {
-      console.log("[webrtc] received offer from:", fromId)
-
       await getLocalStream()
-
       updatePeer(fromId, { stream: null, username: peerUsername || fromId })
       const pc = createPeerConnection(fromId, peerUsername || fromId)
       await pc.setRemoteDescription(new RTCSessionDescription(offer))
@@ -193,7 +138,6 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
     }
 
     async function onAnswer({ fromId, answer }) {
-      console.log("[webrtc] received answer from:", fromId)
       const pc = pcsRef.current.get(fromId)
       if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer))
     }
@@ -202,23 +146,14 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
       const pc = pcsRef.current.get(fromId)
       if (pc && candidate) {
         try { await pc.addIceCandidate(new RTCIceCandidate(candidate)) }
-        catch (_) { /* stale candidate, safe to ignore */ }
+        catch (_) { /* stale, safe to ignore */ }
       }
     }
 
-    function onMeetingPeerLeft({ peerId }) {
-      console.log("[webrtc] peer left call:", peerId)
-      removePeer(peerId)
-    }
+    function onMeetingPeerLeft({ peerId }) { removePeer(peerId) }
 
-    // New joiner receives the list of people already in the call.
-    // We register them in the peers map so the UI shows them immediately,
-    // and wait for their offers to arrive (which the server already triggered).
-    function onExistingMembers({ members: existingList }) {
-      console.log("[webrtc] existing members in call:", existingList)
-      existingList.forEach(({ peerId, username: peerUsername }) => {
-        updatePeer(peerId, { stream: null, username: peerUsername })
-      })
+    function onExistingMembers({ members: list }) {
+      list.forEach(({ peerId, username: u }) => updatePeer(peerId, { stream: null, username: u }))
     }
 
     socket.on("meeting-existing-members", onExistingMembers)
@@ -230,7 +165,7 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
 
     return () => {
       socket.off("meeting-existing-members", onExistingMembers)
-    socket.off("meeting-peer-joined", onMeetingPeerJoined)
+      socket.off("meeting-peer-joined", onMeetingPeerJoined)
       socket.off("webrtc-offer", onOffer)
       socket.off("webrtc-answer", onAnswer)
       socket.off("webrtc-ice-candidate", onIceCandidate)
@@ -238,18 +173,13 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
     }
   }, [socket, createPeerConnection])
 
-  // ── External meetingActive flip (e.g. Leave button) ──────────────────────
   useEffect(() => {
     if (!meetingActive && activeRef.current) leaveMeeting()
   }, [meetingActive, leaveMeeting])
 
-  // ── Unmount cleanup ───────────────────────────────────────────────────────
-  useEffect(() => {
-    return () => { if (activeRef.current) leaveMeeting() }
-  }, [leaveMeeting])
+  useEffect(() => () => { if (activeRef.current) leaveMeeting() }, [leaveMeeting])
 
   // ── Controls ──────────────────────────────────────────────────────────────
-
   const toggleMic = useCallback(() => {
     localStreamRef.current?.getAudioTracks().forEach((t) => { t.enabled = !t.enabled })
     setIsMuted((p) => !p)
@@ -262,7 +192,6 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
 
   const toggleScreenShare = useCallback(async () => {
     if (!localStreamRef.current) return
-
     if (isScreenSharing) {
       screenStreamRef.current?.getTracks().forEach((t) => t.stop())
       screenStreamRef.current = null
@@ -277,9 +206,7 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
         const newStream = new MediaStream([camTrack, audioTrack].filter(Boolean))
         localStreamRef.current = newStream
         setLocalStream(newStream)
-      } catch (e) {
-        console.warn("[webrtc] cam restore failed:", e.message)
-      }
+      } catch (e) { console.warn("[webrtc] cam restore failed:", e.message) }
       setIsScreenSharing(false)
     } else {
       try {
@@ -296,9 +223,7 @@ export default function useWebRTC({ socket, roomId, username, meetingActive }) {
         setLocalStream(newStream)
         setIsScreenSharing(true)
         screenTrack.onended = () => setIsScreenSharing(false)
-      } catch (e) {
-        console.warn("[webrtc] screen share denied:", e.message)
-      }
+      } catch (e) { console.warn("[webrtc] screen share denied:", e.message) }
     }
   }, [isScreenSharing])
 
